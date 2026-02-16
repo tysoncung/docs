@@ -1,0 +1,94 @@
+# Weekly link check for docs.langchain.com using htmltest.
+# Creates a Linear ticket if broken links are found.
+#
+# Required secrets:
+#   LINEAR_API_KEY - Linear API key from https://linear.app/settings/api
+#   LINEAR_TEAM_KEY - Team key for the created issue (e.g. ENG)
+
+name: "🔗 Docs Link Check"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+# on:
+#   schedule:
+#     # Run every Monday at 00:00 UTC
+#     - cron: "0 0 * * 1"
+#   workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-links:
+    name: "Check docs links"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "📋 Checkout"
+        uses: actions/checkout@v4
+
+      - name: "📥 Mirror docs.langchain.com"
+        run: |
+          mkdir -p docs-mirror
+          wget \
+            --recursive \
+            --level=4 \
+            --no-parent \
+            --convert-links \
+            --page-requisites \
+            --adjust-extension \
+            --domains=docs.langchain.com \
+            --wait=1 \
+            --timeout=30 \
+            --tries=2 \
+            -e robots=off \
+            --user-agent="DeepAgents-Docs-Link-Check/1.0" \
+            -P docs-mirror \
+            https://docs.langchain.com/
+
+      - name: "📂 Locate mirrored HTML root"
+        id: locate
+        run: |
+          # wget creates docs.langchain.com subdir; find the HTML root
+          ROOT="docs-mirror/docs.langchain.com"
+          if [ ! -d "$ROOT" ]; then
+            ROOT="docs-mirror"
+          fi
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: "✅ Install htmltest"
+        run: |
+          curl -sSfL https://htmltest.wjdp.uk | bash -s -- -b ./bin
+          ./bin/htmltest -v
+
+      - name: "🔍 Run htmltest"
+        id: htmltest
+        run: |
+          set -o pipefail
+          ROOT="${{ steps.locate.outputs.root }}"
+          ./bin/htmltest -l 2 "$ROOT" 2>&1 | tee htmltest-output.txt
+        continue-on-error: true
+
+      - name: "📤 Upload htmltest output"
+        if: steps.htmltest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: htmltest-output
+          path: htmltest-output.txt
+
+      - name: "📝 Create Linear ticket on broken links"
+        if: steps.htmltest.outcome == 'failure'
+        uses: ctriolo/action-create-linear-issue@v0.7
+        with:
+          linear-api-key: ${{ secrets.LINEAR_API_KEY }}
+          linear-team-key: ${{ secrets.LINEAR_TEAM_KEY }}
+          linear-issue-title: "[Docs] Broken links detected on docs.langchain.com"
+          linear-issue-description: |
+            htmltest found broken links during the weekly docs link check.
+
+            **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            See the workflow logs for full htmltest output.
+          linear-attachment-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          linear-attachment-title: "GitHub Actions run"
