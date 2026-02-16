@@ -1,4 +1,5 @@
-# Weekly link check for docs.langchain.com using htmltest.
+# Link check for docs using htmltest.
+# Builds docs locally, mirrors the dev server, and validates links.
 # Creates a Linear ticket if broken links are found.
 #
 # Required secrets:
@@ -20,49 +21,83 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_FROZEN: "true"
+  UV_NO_SYNC: "true"
+
 jobs:
   check-links:
     name: "Check docs links"
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: "📋 Checkout"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: "📥 Mirror docs.langchain.com"
+      - name: "Configure Python with uv"
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: "3.13"
+
+      - name: "Install Python dependencies"
+        run: uv sync --group test
+
+      - name: "Configure Node.js"
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: "Install Mintlify CLI"
+        run: npm i -g mint@latest
+
+      - name: "Build documentation"
+        run: make build
+
+      - name: "Start Mint dev server and mirror"
         run: |
+          cd build && nohup mint dev --port 3000 > /tmp/mint.log 2>&1 &
+          echo "Waiting for dev server..."
+          for i in {1..60}; do
+            if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+              echo "Server ready"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Server failed to start. Log:"
+              cat /tmp/mint.log
+              exit 1
+            fi
+            sleep 2
+          done
+          cd ..
           mkdir -p docs-mirror
           wget \
             --recursive \
             --level=4 \
             --no-parent \
+            --no-host-directories \
             --convert-links \
             --page-requisites \
             --adjust-extension \
-            --domains=docs.langchain.com \
-            --wait=1 \
+            --domains=localhost \
+            --wait=0 \
             --timeout=30 \
             --tries=2 \
             -e robots=off \
-            --user-agent="DeepAgents-Docs-Link-Check/1.0" \
+            --user-agent="LangChain-Docs-Link-Check/1.0" \
             -P docs-mirror \
-            https://docs.langchain.com/
+            http://localhost:3000/
 
       - name: "📂 Locate mirrored HTML root"
         id: locate
-        run: |
-          # wget creates docs.langchain.com subdir; find the HTML root
-          ROOT="docs-mirror/docs.langchain.com"
-          if [ ! -d "$ROOT" ]; then
-            ROOT="docs-mirror"
-          fi
-          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+        run: echo "root=docs-mirror" >> "$GITHUB_OUTPUT"
 
-      - name: "✅ Install htmltest"
+      - name: "Install htmltest"
         run: |
           curl -sSfL https://htmltest.wjdp.uk | bash -s -- -b ./bin
           ./bin/htmltest -v
 
-      - name: "🔍 Run htmltest"
+      - name: "Run htmltest"
         id: htmltest
         run: |
           set -o pipefail
@@ -70,22 +105,22 @@ jobs:
           ./bin/htmltest -l 2 "$ROOT" 2>&1 | tee htmltest-output.txt
         continue-on-error: true
 
-      - name: "📤 Upload htmltest output"
+      - name: "Upload htmltest output"
         if: steps.htmltest.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: htmltest-output
           path: htmltest-output.txt
 
-      - name: "📝 Create Linear ticket on broken links"
+      - name: "Create Linear ticket on broken links"
         if: steps.htmltest.outcome == 'failure'
         uses: ctriolo/action-create-linear-issue@v0.7
         with:
           linear-api-key: ${{ secrets.LINEAR_API_KEY }}
           linear-team-key: ${{ secrets.LINEAR_TEAM_KEY }}
-          linear-issue-title: "[Docs] Broken links detected on docs.langchain.com"
+          linear-issue-title: "[Docs] Broken links detected in documentation build"
           linear-issue-description: |
-            htmltest found broken links during the weekly docs link check.
+            htmltest found broken links during the docs link check (local build).
 
             **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
