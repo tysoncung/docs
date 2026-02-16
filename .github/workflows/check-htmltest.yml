@@ -54,15 +54,20 @@ jobs:
         run: PYTHONPATH=. uv run pipeline build
 
       - name: "Start Mint dev server"
+        env:
+          CI: "true"
+          TERM: "dumb"
+          FORCE_COLOR: "0"
         run: |
-          cd build && nohup mint dev --port 3000 > /tmp/mint.log 2>&1 &
+          cd build
+          nohup mint dev --port 3000 > /tmp/mint.log 2>&1 &
           echo "Waiting for dev server..."
-          for i in {1..60}; do
-            if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+          for i in {1..90}; do
+            if curl -sf http://127.0.0.1:3000/ > /dev/null 2>&1; then
               echo "Server ready"
               break
             fi
-            if [ $i -eq 60 ]; then
+            if [ $i -eq 90 ]; then
               echo "Server failed to start. Log:"
               cat /tmp/mint.log
               exit 1
