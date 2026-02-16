@@ -89,6 +89,11 @@ jobs:
           format: markdown
           output: lychee-output.md
 
+      - name: "Show lychee results"
+        run: |
+          echo "--- Lychee link check results ---"
+          if [ -f lychee-output.md ]; then cat lychee-output.md; else echo "No output file"; fi
+
       - name: "Upload lychee output"
         if: steps.lychee.outputs.exit_code != '0'
         uses: actions/upload-artifact@v4
